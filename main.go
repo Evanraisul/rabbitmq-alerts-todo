@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 
 	"github.com/michaelklishin/rabbit-hole/v2"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
+	"sigs.k8s.io/yaml"
+	corev1 "k8s.io/api/core/v1"
 )
 
 func main() {
@@ -246,7 +252,85 @@ func main() {
 	fmt.Println()
 
 	// Client Connection Management
+	fmt.Println("\n--- Active Connections ---")
+	fmt.Printf("Total Active Connections: %d\n", len(connections))
+	for _, conn := range connections {
+		fmt.Printf("Connection Name: %s, User: %s, Channels: %d\n", conn.Name, conn.User, conn.Channels)
+	}
+	fmt.Println()
 
 	// 7. RabbitMQDown
+	// Describe RabbitMQ CR
+	// Load kubeconfig
+	kubeconfig := "/home/evan/.kube/config" // Replace with your kubeconfig path
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	if err != nil {
+		log.Fatalf("Failed to load kubeconfig: %v", err)
+	}
 
+	// Create Kubernetes client
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Fatalf("Failed to create Kubernetes client: %v", err)
+	}
+
+	// Define namespace and RabbitMQ CR name
+	namespace := "demo"
+	rabbitmqCRName := "rm-quickstart"
+
+	// Get the RabbitMQ CR (assumes CRD is registered in the API server)
+	cr, err := clientset.RESTClient().Get().
+		AbsPath(fmt.Sprintf("/apis/kubedb.com/v1alpha2/namespaces/%s/rabbitmqs/%s", namespace, rabbitmqCRName)).
+		DoRaw(context.TODO())
+	if err != nil {
+		log.Fatalf("Failed to describe RabbitMQ CR: %v", err)
+	}
+
+	// Converting to YAML
+	crYaml, err := yaml.JSONToYAML(cr)
+	if err != nil {
+		log.Fatalf("Error converting JSON to YAML: %v", err)
+	}
+
+	// Print the YAML output
+	fmt.Println(string(crYaml))
+	fmt.Println()
+
+	// Restart RabbitMQ Pods
+	// Define RabbitMQ pod label selector
+	labelSelector := "app.kubernetes.io/name=rabbitmq" // Adjust label as needed
+
+	// List RabbitMQ pods
+	pods, err := clientset.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		log.Fatalf("Failed to list RabbitMQ pods: %v", err)
+	}
+
+	// Delete each RabbitMQ pod to restart it
+	for _, pod := range pods.Items {
+		fmt.Printf("Restarting pod: %s\n", pod.Name)
+		err := clientset.CoreV1().Pods(namespace).Delete(context.TODO(), pod.Name, metav1.DeleteOptions{})
+		if err != nil {
+			log.Printf("Failed to delete pod %s: %v", pod.Name, err)
+		} else {
+			fmt.Printf("Successfully deleted pod: %s\n", pod.Name)
+		}
+	}
+	fmt.Println()
+
+	//RabbitMQ Pods log
+	// Define namespace and RabbitMQ pod name
+	podName := "rm-quickstart-0" // Replace with your RabbitMQ pod name
+
+	// Fetch logs for the RabbitMQ pod
+	for _, pod := range pods.Items {
+		logs, err := clientset.CoreV1().Pods(namespace).GetLogs(pod.Name, &corev1.PodLogOptions{}).DoRaw(context.TODO())
+		if err != nil {
+			log.Fatalf("Failed to fetch logs for pod %s: %v", podName, err)
+		}
+		fmt.Printf("Logs for pod %s:\n%s\n", podName, string(logs))
+	}
+	fmt.Println()
 }
